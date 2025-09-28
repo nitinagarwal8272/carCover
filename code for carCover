@@ -1,0 +1,166 @@
+import requests
+from bs4 import BeautifulSoup
+import json
+import time
+import random
+from urllib.parse import urljoin
+import csv
+
+class OLXScraper:
+    def __init__(self):
+        self.base_url = "https://www.olx.in"
+        self.search_url = "https://www.olx.in/items/q-car-cover"
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+        }
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
+        
+    def get_page_content(self, url, page=1):
+        params = {'page': page} if page > 1 else {}
+        try:
+            response = self.session.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            return response.text
+        except requests.RequestException as e:
+            print(f"Error fetching page {page}: {e}")
+            return None
+    
+    def parse_listing(self, listing_elem):
+        try:
+            title_elem = listing_elem.find('span', {'data-aut-id': 'itemTitle'})
+            title = title_elem.text.strip() if title_elem else 'N/A'
+            
+            price_elem = listing_elem.find('span', {'data-aut-id': 'itemPrice'})
+            price_text = price_elem.text.strip() if price_elem else '₹ 0'
+            price_num = int(''.join(filter(str.isdigit, price_text))) if price_text != '₹ 0' else 0
+            
+            location_elem = listing_elem.find('span', {'data-aut-id': 'item-location'})
+            location = location_elem.text.strip() if location_elem else 'N/A'
+            
+            date_elem = listing_elem.find('span', {'data-aut-id': 'item-date'})
+            date = date_elem.text.strip() if date_elem else 'N/A'
+            
+            link_elem = listing_elem.find('a')
+            link = urljoin(self.base_url, link_elem.get('href')) if link_elem else 'N/A'
+            
+            return {
+                'title': title,
+                'price': price_text,
+                'price_numeric': price_num,
+                'location': location,
+                'date': date,
+                'link': link
+            }
+        except Exception as e:
+            return None
+    
+    def scrape_listings(self, max_pages=5):
+        all_listings = []
+        
+        for page in range(1, max_pages + 1):
+            print(f"Scraping page {page}...")
+            content = self.get_page_content(self.search_url, page)
+            
+            if not content:
+                break
+                
+            soup = BeautifulSoup(content, 'html.parser')
+            listings = soup.find_all('div', {'data-aut-id': 'itemBox'})
+            
+            if not listings:
+                print(f"No listings found on page {page}")
+                break
+            
+            page_listings = []
+            for listing in listings:
+                parsed = self.parse_listing(listing)
+                if parsed:
+                    page_listings.append(parsed)
+            
+            all_listings.extend(page_listings)
+            print(f"Found {len(page_listings)} listings on page {page}")
+            
+            time.sleep(random.uniform(1, 3))
+        
+        return self.merge_sort_listings(all_listings)
+    
+    def merge_sort_listings(self, listings):
+        if len(listings) <= 1:
+            return listings
+        
+        mid = len(listings) // 2
+        left = self.merge_sort_listings(listings[:mid])
+        right = self.merge_sort_listings(listings[mid:])
+        
+        return self.merge(left, right)
+    
+    def merge(self, left, right):
+        result = []
+        i = j = 0
+        
+        while i < len(left) and j < len(right):
+            if left[i]['price_numeric'] <= right[j]['price_numeric']:
+                result.append(left[i])
+                i += 1
+            else:
+                result.append(right[j])
+                j += 1
+        
+        result.extend(left[i:])
+        result.extend(right[j:])
+        return result
+    
+    def save_to_csv(self, listings, filename='car_covers_olx.csv'):
+        with open(filename, 'w', newline='', encoding='utf-8') as file:
+            fieldnames = ['title', 'price', 'location', 'date', 'link']
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            
+            writer.writeheader()
+            for listing in listings:
+                writer.writerow({
+                    'title': listing['title'],
+                    'price': listing['price'],
+                    'location': listing['location'],
+                    'date': listing['date'],
+                    'link': listing['link']
+                })
+    
+    def save_to_json(self, listings, filename='car_covers_olx.json'):
+        clean_listings = []
+        for listing in listings:
+            clean_listing = {k: v for k, v in listing.items() if k != 'price_numeric'}
+            clean_listings.append(clean_listing)
+        
+        with open(filename, 'w', encoding='utf-8') as file:
+            json.dump(clean_listings, file, indent=2, ensure_ascii=False)
+
+def main():
+    scraper = OLXScraper()
+    
+    print("Starting OLX car cover search...")
+    listings = scraper.scrape_listings(max_pages=3)
+    
+    if listings:
+        print(f"\nFound {len(listings)} total listings")
+        print("Saving results...")
+        
+        scraper.save_to_csv(listings)
+        scraper.save_to_json(listings)
+        
+        print("Results saved to:")
+        print("- car_covers_olx.csv")
+        print("- car_covers_olx.json")
+        
+        print(f"\nTop 5 cheapest listings:")
+        for i, listing in enumerate(listings[:5]):
+            print(f"{i+1}. {listing['title']} - {listing['price']} ({listing['location']})")
+    else:
+        print("No listings found")
+
+if __name__ == "__main__":
+    main()
